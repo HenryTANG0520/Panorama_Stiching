@@ -578,6 +578,48 @@ class Trainer:
         matching_scores = outputs['matching_scores']
         predictions = (torch.sigmoid(matching_scores) > 0.5).float()
         return predictions.mean().item()
+    
+    def train(self):
+        best_metric = float('inf')
+
+        for epoch in range(self.config['epochs']):
+            self.logger.info(f"Epoch {epoch+1}/{self.config['epochs']}")
+
+            # 训练一个epoch
+            train_loss, train_acc = self.train_epoch()
+
+            # 验证
+            val_loss, val_acc = self.validate()
+
+            # 更新学习率
+            self.scheduler.step()
+
+            # 记录指标
+            metrics = {
+                'train_loss': train_loss,
+                'train_acc': train_acc,
+                'val_loss': val_loss,
+                'val_acc': val_acc
+            }
+
+            # 记录到wandb
+            if self.config.get('use_wandb', False):
+                wandb.log(metrics)
+
+            # 保存检查点
+            is_best = val_loss < best_metric
+            if is_best:
+                best_metric = val_loss
+
+            self.save_checkpoint(
+                epoch=epoch,
+                model_state=self.model.state_dict(),
+                optimizer_state=self.optimizer.state_dict(),
+                scheduler_state=self.scheduler.state_dict(),
+                best_metric=best_metric,
+                is_best=is_best
+            )
+
 class StitchingEvaluator:
     """
     拼接评估器
