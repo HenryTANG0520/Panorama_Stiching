@@ -6,22 +6,12 @@ import gc
 
 def create_folders():
     """创建必要的文件夹结构"""
-    folders = [
-        'temp_frames',
-        'output'
-    ]
-    
+    folders = ['temp_frames', 'output']
     for folder in folders:
         Path(folder).mkdir(parents=True, exist_ok=True)
 
 def extract_frames(video_path, start_frame, frame_interval):
-    """
-    从指定帧开始提取帧
-    Args:
-        video_path: 视频路径
-        start_frame: 开始帧的索引
-        frame_interval: 帧间隔
-    """
+    """从指定帧开始提取帧"""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"无法打开视频文件: {video_path}")
@@ -35,7 +25,6 @@ def extract_frames(video_path, start_frame, frame_interval):
         print(f"从第 {start_frame} 帧开始，间隔 {frame_interval} 帧")
         print(f"预计处理帧数: {(total_frames - start_frame ) // frame_interval}")
         
-        # 跳到指定的开始帧
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         
         while True:
@@ -59,116 +48,100 @@ def extract_frames(video_path, start_frame, frame_interval):
         cap.release()
         gc.collect()
 
-def stitch_images(img1, img2):
-    """图像拼接函数"""
-    try:
-        # 1. 特征点检测与匹配
-        sift = cv2.SIFT_create()
+def detect_movement_direction(img1, img2):
+    """检测两帧之间的运动方向"""
+    # 使用SIFT特征检测
+    sift = cv2.SIFT_create()
+    keypoints1, descriptors1 = sift.detectAndCompute(img1, None)
+    keypoints2, descriptors2 = sift.detectAndCompute(img2, None)
+    
+    if descriptors1 is None or descriptors2 is None:
+        return None, None
+    
+    # 特征匹配
+    bf = cv2.BFMatcher()
+    matches = bf.knnMatch(descriptors1, descriptors2, k=2)
+    
+    # 筛选好的匹配点
+    good_matches = []
+    for m, n in matches:
+        if m.distance < 0.75 * n.distance:
+            good_matches.append(m)
+            
+    if len(good_matches) < 10:  # 确保有足够的匹配点
+        return None, None
+    
+    # 计算匹配点的平均移动方向
+    movements = []
+    for match in good_matches:
+        pt1 = keypoints1[match.queryIdx].pt
+        pt2 = keypoints2[match.trainIdx].pt
+        movements.append((pt2[0] - pt1[0], pt2[1] - pt1[1]))
+    
+    avg_movement = np.mean(movements, axis=0)
+    
+    # 清理内存
+    del keypoints1, keypoints2, descriptors1, descriptors2, matches, good_matches
+    gc.collect()
+    
+    # 返回主要运动方向和平均位移
+    return avg_movement, len(movements)
 
-        keypoints1, descriptors1 = sift.detectAndCompute(img1, None)
-        keypoints2, descriptors2 = sift.detectAndCompute(img2, None)
-
-        if descriptors1 is None or descriptors2 is None:
-            return None
-
-        # 创建特征匹配器
-        bf = cv2.BFMatcher()
-        matches = bf.knnMatch(descriptors1, descriptors2, k=2)
-
-        # 立即释放描述符内存
-        del descriptors1, descriptors2
-
-        # 2. 筛选好的匹配点
-        good_matches = []
-        for m, n in matches:
-            if m.distance < 0.75 * n.distance:
-                good_matches.append(m)
-
-        del matches
-        gc.collect()
-
-        if len(good_matches) >= 4:
-            # 获取匹配点的坐标
-            src_pts = np.float32([keypoints1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-            dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-
-            # 释放关键点内存
-            del keypoints1, keypoints2, good_matches
-
-            # 计算单应性矩阵
-            H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
-
-            del src_pts, dst_pts
-            gc.collect()
-
-            if H is not None:
-                # 计算变换后图像的范围
-                h1, w1 = img1.shape[:2]
-                h2, w2 = img2.shape[:2]
-                pts1 = np.float32([[0, 0], [0, h1], [w1, h1], [w1, 0]]).reshape(-1, 1, 2)
-                pts2 = cv2.perspectiveTransform(pts1, H)
-
-                pts = np.concatenate((pts2, np.float32([[0, 0], [0, h2], [w2, h2], [w2, 0]]).reshape(-1, 1, 2)))
-                [xmin, ymin] = np.int32(pts.min(axis=0).ravel() - 0.5)
-                [xmax, ymax] = np.int32(pts.max(axis=0).ravel() + 0.5)
-                t = [-xmin, -ymin]
-
-                del pts, pts1, pts2
-
-                # 创建平移矩阵
-                Ht = np.array([[1, 0, t[0]], [0, 1, t[1]], [0, 0, 1]])
-                H_final = Ht.dot(H)
-                del H, Ht
-
-                # 对第一张图片进行变换
-                result = cv2.warpPerspective(img1, H_final, (xmax-xmin, ymax-ymin))
-
-                # 将第二张图片复制到结果图像中
-                result[t[1]:h2+t[1], t[0]:w2+t[0]] = img2
-
-                # 处理重叠区域
-                mask1 = np.zeros((ymax-ymin, xmax-xmin), dtype=np.float32)
-                mask1[t[1]:h2+t[1], t[0]:w2+t[0]] = 1
-                mask2 = cv2.warpPerspective(np.ones_like(img1[:,:,0], dtype=np.float32), H_final, (xmax-xmin, ymax-ymin))
-
-                # 创建权重矩阵
-                weight1 = cv2.GaussianBlur(mask1, (21, 21), 11)
-                weight2 = cv2.GaussianBlur(mask2, (21, 21), 11)
-
-                del mask1, mask2
-
-                # 归一化权重
-                weight_sum = weight1 + weight2 + 1e-6
-                weight1 /= weight_sum
-                weight2 /= weight_sum
-                del weight_sum
-
-                # 扩展维度
-                weight1 = np.expand_dims(weight1, axis=2)
-                weight2 = np.expand_dims(weight2, axis=2)
-
-                # 最终混合
-                warped_img1 = cv2.warpPerspective(img1, H_final, (xmax-xmin, ymax-ymin))
-                result = (weight1 * result + weight2 * warped_img1).astype(np.uint8)
-
-                # 清理最后的中间变量
-                del weight1, weight2, warped_img1, H_final
-                gc.collect()
-
-                return result
-
-        return None
-
-    except Exception as e:
-        print(f"拼接过程中出错: {str(e)}")
-        return None
-
-    finally:
-        # 强制垃圾回收
-        gc.collect()
+def blend_images(base_img, new_img, movement):
+    """根据运动方向混合图像"""
+    h, w = base_img.shape[:2]
+    dx, dy = movement
+    
+    # 创建结果图像（与基准图像相同大小）
+    result = base_img.copy()
+    
+    # 计算混合区域
+    blend_width = w // 4  # 混合区域宽度
+    blend_height = h // 4  # 混合区域高度
+    
+    # 根据主要运动方向决定如何混合
+    if abs(dy) > abs(dx):  # 垂直运动为主
+        if dy < 0:  # 向上运动
+            # 取新图像的上半部分
+            new_region = new_img[:h//2, :]
+            # 创建渐变权重矩阵
+            weight = np.linspace(1, 0, h//2)[:, np.newaxis]
+            weight = np.repeat(weight, w, axis=1)
+            weight = np.stack([weight] * 3, axis=2)
+            
+            # 混合图像
+            result[:h//2, :] = (new_region * weight + 
+                               result[:h//2, :] * (1 - weight)).astype(np.uint8)
+        else:  # 向下运动
+            new_region = new_img[h//2:, :]
+            weight = np.linspace(0, 1, h//2)[:, np.newaxis]
+            weight = np.repeat(weight, w, axis=1)
+            weight = np.stack([weight] * 3, axis=2)
+            
+            result[h//2:, :] = (new_region * weight + 
+                               result[h//2:, :] * (1 - weight)).astype(np.uint8)
+    else:  # 水平运动为主
+        if dx < 0:  # 向左运动
+            new_region = new_img[:, :w//2]
+            weight = np.linspace(1, 0, w//2)[np.newaxis, :]
+            weight = np.repeat(weight, h, axis=0)
+            weight = np.stack([weight] * 3, axis=2)
+            
+            result[:, :w//2] = (new_region * weight + 
+                               result[:, :w//2] * (1 - weight)).astype(np.uint8)
+        else:  # 向右运动
+            new_region = new_img[:, w//2:]
+            weight = np.linspace(0, 1, w//2)[np.newaxis, :]
+            weight = np.repeat(weight, h, axis=0)
+            weight = np.stack([weight] * 3, axis=2)
+            
+            result[:, w//2:] = (new_region * weight + 
+                               result[:, w//2:] * (1 - weight)).astype(np.uint8)
+    
+    return result
 
 def stitch_frames_with_checkpoints(total_frames, checkpoint_interval=5):
-    """分批拼接所有帧"""
+    """分批处理所有帧"""
     result = None
     try:
         result = cv2.imread(f'temp_frames/frame_0.jpg')
@@ -190,21 +163,20 @@ def stitch_frames_with_checkpoints(total_frames, checkpoint_interval=5):
                 
                 print(f"\r拼接进度: {i}/{total_frames-1}", end="", flush=True)
                 
+                # 检测运动方向
+                movement, match_count = detect_movement_direction(result, next_frame)
+                
+                if movement is not None and match_count >= 10:
+                    # 根据运动方向混合图像
+                    result = blend_images(result, next_frame, movement)
+                else:
+                    print(f"\nWarning: Failed to detect movement for frame {i}")
+                
+                # 保存检查点
                 if i - last_checkpoint >= checkpoint_interval:
                     cv2.imwrite(f'temp_frames/checkpoint_{checkpoint_count + 1}.jpg', result)
-                    del result
-                    gc.collect()
                     checkpoint_count += 1
                     last_checkpoint = i
-                    result = cv2.imread(f'temp_frames/checkpoint_{checkpoint_count}.jpg')
-                
-                stitched = stitch_images(result, next_frame)
-                if stitched is not None:
-                    del result
-                    result = stitched
-                    gc.collect()
-                else:
-                    print(f"\nWarning: Failed to stitch frame {i}")
                 
                 del next_frame
                 gc.collect()
@@ -257,7 +229,7 @@ def main(video_path, start_frame, frame_interval):
     except Exception as e:
         print(f"发生错误: {str(e)}")
     finally:
-        # cleanup()
+        cleanup()
         gc.collect()
 
 if __name__ == "__main__":
