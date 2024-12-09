@@ -73,22 +73,50 @@ class SimplePanorama:
     
     def add_frame(self, frame, angle, magnitude):
         """添加新帧到全景图"""
-        # 计算新位置
-        dx = magnitude * math.cos(math.radians(angle + 90))  # 0度对应向上
-        dy = -magnitude * math.sin(math.radians(angle + 90))  # 图像坐标系y轴向下为正
+        # 计算新位置（保持之前的正确计算方式）
+        dx = magnitude * math.cos(math.radians(angle - 90))
+        dy = magnitude * math.sin(math.radians(angle - 90))
         
         new_x = int(self.current_x + dx)
         new_y = int(self.current_y + dy)
         
-        # 如果需要则扩展画布
+        # 如果需要则扩展画布（保持不变）
         offset_x, offset_y = self.expand_canvas_if_needed(new_x, new_y)
         new_x += offset_x
         new_y += offset_y
         
-        # 直接放置新帧
-        self.canvas[new_y:new_y+self.frame_h, new_x:new_x+self.frame_w] = frame
+        # 计算重叠区域
+        roi = self.canvas[new_y:new_y+self.frame_h, new_x:new_x+self.frame_w]
         
-        # 更新当前位置和边界
+        # 在重叠区域应用渐变混合
+        alpha = np.zeros((self.frame_h, self.frame_w), dtype=np.float32)
+        
+        # 根据移动方向创建渐变
+        if abs(dx) > abs(dy):  # 主要是水平移动
+            blend_width = int(abs(dx))  # 使用移动距离作为混合宽度
+            if dx > 0:  # 向右移动
+                alpha[:, :blend_width] = np.linspace(0, 1, blend_width)
+                alpha[:, blend_width:] = 1
+            else:  # 向左移动
+                alpha[:, -blend_width:] = np.linspace(1, 0, blend_width)
+                alpha[:, :-blend_width] = 1
+        else:  # 主要是垂直移动
+            blend_width = int(abs(dy))  # 使用移动距离作为混合宽度
+            if dy > 0:  # 向下移动
+                alpha[:blend_width, :] = np.linspace(0, 1, blend_width)[:, np.newaxis]
+                alpha[blend_width:, :] = 1
+            else:  # 向上移动
+                alpha[-blend_width:, :] = np.linspace(1, 0, blend_width)[:, np.newaxis]
+                alpha[:-blend_width, :] = 1
+        
+        # 应用混合
+        alpha = np.stack([alpha] * 3, axis=2)
+        result = (1 - alpha) * roi + alpha * frame
+        
+        # 更新画布
+        self.canvas[new_y:new_y+self.frame_h, new_x:new_x+self.frame_w] = result.astype(np.uint8)
+        
+        # 更新位置信息（保持不变）
         self.current_x = new_x
         self.current_y = new_y
         self.min_x = min(self.min_x, new_x)
@@ -198,5 +226,5 @@ def process_video(video_path, start_frame=0, frame_interval=1):
         gc.collect()
 
 if __name__ == "__main__":
-    video_path = "video/4.mp4"  # 替换为实际的视频路径
-    process_video(video_path, start_frame=1, frame_interval=5)
+    video_path = "video/7.mp4"  # 替换为实际的视频路径
+    process_video(video_path, start_frame=1, frame_interval=10)
