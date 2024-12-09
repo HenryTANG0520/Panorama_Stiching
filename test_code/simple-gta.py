@@ -279,7 +279,7 @@ def main(video_path, start_frame, frame_interval):
         gc.collect()
 
 if __name__ == "__main__":
-    video_path = "video/gtav-v1.mp4"  # 替换为你的视频路径
+    video_path = "video/7.mp4"  # 替换为你的视频路径
     start_frame = 30  # 从第30帧开始
     frame_interval = 60  # 每60帧取一帧
     main(video_path, start_frame, frame_interval)
