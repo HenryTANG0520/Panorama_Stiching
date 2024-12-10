@@ -226,5 +226,5 @@ def process_video(video_path, start_frame=0, frame_interval=1):
         gc.collect()
 
 if __name__ == "__main__":
-    video_path = "video/7.mp4"  # 替换为实际的视频路径
+    video_path = "video/4.mp4"  # 替换为实际的视频路径
     process_video(video_path, start_frame=1, frame_interval=10)
