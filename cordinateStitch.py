@@ -208,10 +208,10 @@ def process_video(video_path, start_frame=0, frame_interval=1):
             # 计算运动
             angle, magnitude = calculate_movement(prev_frame, curr_frame)
             
-            if angle is not None and magnitude > 5:  # 只在有显著运动时处理
+            # if angle is not None and magnitude > 5:  # 只在有显著运动时处理
                 # 添加到全景图
-                panorama.add_frame(curr_frame, angle, magnitude)
-                print(f"\r处理第 {frame_count} 帧 - 方向: {angle:.1f}°, 幅度: {magnitude:.1f}", end="")
+            panorama.add_frame(curr_frame, angle, magnitude)
+            print(f"\r处理第 {frame_count} 帧 - 方向: {angle:.1f}°, 幅度: {magnitude:.1f}", end="")
                 
             prev_frame = curr_frame.copy()
             frame_count += 1
@@ -226,5 +226,5 @@ def process_video(video_path, start_frame=0, frame_interval=1):
         gc.collect()
 
 if __name__ == "__main__":
-    video_path = "video/2287_raw.mp4"  # 替换为实际的视频路径
+    video_path = "video/4.mp4"  # 替换为实际的视频路径
     process_video(video_path, start_frame=1, frame_interval=10)
