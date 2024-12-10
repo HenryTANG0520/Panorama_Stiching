@@ -74,8 +74,8 @@ class SimplePanorama:
     def add_frame(self, frame, angle, magnitude):
         """添加新帧到全景图"""
         # 计算新位置（保持之前的正确计算方式）
-        dx = magnitude * math.cos(math.radians(angle - 90))
-        dy = magnitude * math.sin(math.radians(angle - 90))
+        dx = magnitude * math.cos(math.radians(angle + 90))
+        dy = magnitude * math.sin(math.radians(angle - 90)) # y坐标为负
         
         new_x = int(self.current_x + dx)
         new_y = int(self.current_y + dy)
@@ -226,5 +226,5 @@ def process_video(video_path, start_frame=0, frame_interval=1):
         gc.collect()
 
 if __name__ == "__main__":
-    video_path = "video/4.mp4"  # 替换为实际的视频路径
+    video_path = "video/2287_raw.mp4"  # 替换为实际的视频路径
     process_video(video_path, start_frame=1, frame_interval=10)
