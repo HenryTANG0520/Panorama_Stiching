@@ -156,7 +156,7 @@ def calculate_movement(img1, img2):
     # 获取图像尺寸用于调试信息
     h, w = img1.shape[:2]
     
-    # 使用ORB替代SIFT
+    # 使用ORB
     orb = cv2.ORB_create(nfeatures=500)
     keypoints1, descriptors1 = orb.detectAndCompute(img1, None)
     keypoints2, descriptors2 = orb.detectAndCompute(img2, None)
