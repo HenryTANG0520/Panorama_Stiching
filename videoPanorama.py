@@ -1,3 +1,6 @@
+# videoPanorama.py
+
+import sys
 import cv2
 import numpy as np
 from pathlib import Path
@@ -6,7 +9,157 @@ import psutil
 import os
 import gc
 import math
+from PyQt6 import QtCore, QtGui, QtWidgets, uic
+from PyQt6.QtCore import pyqtSignal, QObject, QThread, Qt
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
+# 定义一个类来重定向print到QTextBrowser
+class EmittingStream(QObject):
+    text_written = pyqtSignal(str)
+
+    def write(self, text):
+        self.text_written.emit(str(text))
+
+    def flush(self):
+        pass
+
+# 定义视频处理的Worker
+class VideoProcessor(QObject):
+    # 定义信号
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(np.ndarray, float, float, int)
+    error = pyqtSignal(str)
+    update_display = pyqtSignal(np.ndarray)
+
+    def __init__(self, video_path, start_frame, frame_interval, resize_scale, display_every):
+        super().__init__()
+        self.video_path = video_path
+        self.start_frame = start_frame
+        self.frame_interval = frame_interval
+        self.resize_scale = resize_scale
+        self.display_every = display_every
+        self.is_running = True
+
+    def process_video(self):
+        try:
+            # 创建输出目录
+            Path('output').mkdir(exist_ok=True)
+
+            # 初始化性能监控变量
+            start_time = time.time()
+            max_memory = 0
+            memory_readings = []
+
+            # 打开视频
+            cap = cv2.VideoCapture(self.video_path)
+            if not cap.isOpened():
+                self.error.emit("无法打开视频文件")
+                return
+
+            # 跳到起始帧
+            cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
+
+            # 创建生成器
+            frames = self.frame_generator(cap, self.frame_interval, self.resize_scale)
+
+            # 读取第一帧
+            try:
+                prev_frame = next(frames)
+            except StopIteration:
+                self.error.emit("无法读取第一帧")
+                cap.release()
+                return
+
+            # 初始化全景图
+            panorama = Panorama(prev_frame)
+            frame_count = 1
+
+            # 发送初始状态到显示
+            self.update_display.emit(panorama.get_result())
+
+            for curr_frame in frames:
+                if not self.is_running:
+                    self.progress.emit("用户终止处理")
+                    break
+
+                # 计算运动
+                angle, magnitude = calculate_movement(prev_frame, curr_frame)
+
+                # 检查计算结果是否有效
+                if angle is None or magnitude is None:
+                    self.progress.emit(f"无法计算帧间运动，跳过第 {frame_count} 帧")
+                    prev_frame = curr_frame
+                    frame_count += 1
+                    continue
+
+                # 添加到全景图
+                try:
+                    panorama.add_frame(curr_frame, angle, magnitude)
+                    self.progress.emit(f"处理第 {frame_count} 帧 - 方向: {angle:.1f}°, 幅度: {magnitude:.1f}")
+
+                    # 获取当前结果并发送更新信号（每 display_every 帧）
+                    if frame_count % self.display_every == 0:
+                        current_result = panorama.get_result()
+                        self.update_display.emit(current_result)
+
+                except Exception as e:
+                    self.error.emit(f"处理帧时出错: {str(e)}")
+                    break
+
+                # 监控内存使用
+                current_memory = self.get_memory_usage()
+                memory_readings.append(current_memory)
+                max_memory = max(max_memory, current_memory)
+
+                prev_frame = curr_frame
+                frame_count += 1
+
+                # 定期清理内存
+                if frame_count % 100 == 0:
+                    gc.collect()
+
+            # 保存结果
+            end_time = time.time()
+            result = panorama.get_result()
+            output_path = f'output/panorama_output.jpg'
+            cv2.imwrite(output_path, result)
+            self.progress.emit(f"处理完成，共处理 {frame_count} 帧，结果保存至 {output_path}")
+
+            # 计算性能统计
+            total_time = end_time - start_time
+            avg_memory = sum(memory_readings) / len(memory_readings) if memory_readings else 0
+
+            # 发送完成信号
+            self.finished.emit(result, total_time, avg_memory, frame_count)
+
+            cap.release()
+            gc.collect()
+
+        except Exception as e:
+            self.error.emit(f"处理视频时发生异常: {str(e)}")
+
+    def stop(self):
+        self.is_running = False
+
+    def frame_generator(self, cap, frame_interval=1, resize_scale=1.0):
+        """生成器函数，按指定间隔生成帧"""
+        while self.is_running:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if resize_scale != 1.0:
+                frame = cv2.resize(frame, (0, 0), fx=resize_scale, fy=resize_scale, interpolation=cv2.INTER_AREA)
+            yield frame
+            for _ in range(frame_interval - 1):
+                if not cap.grab():
+                    return
+
+    def get_memory_usage(self):
+        """获取当前进程的内存使用量（MB）"""
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024
+
+# 您现有的Panorama类和其他辅助函数
 class Panorama:
     def __init__(self, initial_frame):
         """初始化全景图系统"""
@@ -161,12 +314,11 @@ def calculate_movement(img1, img2):
     keypoints1, descriptors1 = orb.detectAndCompute(img1, None)
     keypoints2, descriptors2 = orb.detectAndCompute(img2, None)
     
-    print(f"\n== 调试信息 ==")
-    print(f"图像尺寸: {w}x{h}")
-    print(f"检测到的特征点数量: 帧1={len(keypoints1)}, 帧2={len(keypoints2)}")
+    debug_info = f"\n== 调试信息 ==\n图像尺寸: {w}x{h}\n检测到的特征点数量: 帧1={len(keypoints1)}, 帧2={len(keypoints2)}\n"
     
     if descriptors1 is None or descriptors2 is None:
-        print("未检测到特征点")
+        debug_info += "未检测到特征点\n"
+        print(debug_info)
         return None, None
     
     # 特征匹配
@@ -176,10 +328,11 @@ def calculate_movement(img1, img2):
     # 过滤匹配点
     good_matches = [m for m, n in matches if m.distance < 0.75 * n.distance]
     
-    print(f"良好匹配点数量: {len(good_matches)}")
+    debug_info += f"良好匹配点数量: {len(good_matches)}\n"
     
     if len(good_matches) < 10:
-        print("匹配点数量不足")
+        debug_info += "匹配点数量不足\n"
+        print(debug_info)
         return None, None
     
     # 计算移动向量
@@ -195,8 +348,7 @@ def calculate_movement(img1, img2):
     
     # 计算移动统计信息
     std_dev = np.std(movements, axis=0)
-    print(f"平均移动: dx={dx:.2f}, dy={dy:.2f}")
-    print(f"移动标准差: dx_std={std_dev[0]:.2f}, dy_std={std_dev[1]:.2f}")
+    debug_info += f"平均移动: dx={dx:.2f}, dy={dy:.2f}\n移动标准差: dx_std={std_dev[0]:.2f}, dy_std={std_dev[1]:.2f}\n"
     
     # 计算角度（0度为正上方，顺时针旋转）
     angle = math.degrees(math.atan2(-dy, dx))  # 使用-dy是因为图像坐标系y轴向下
@@ -212,10 +364,9 @@ def calculate_movement(img1, img2):
     
     # 输出移动方向相关信息
     move_direction = "横向" if is_horizontal else "纵向"
-    print(f"主要移动方向: {move_direction}")
-    print(f"移动角度: {angle:.2f}°")
-    print(f"移动幅度: {magnitude:.2f}")
-    print("================\n")
+    debug_info += f"主要移动方向: {move_direction}\n移动角度: {angle:.2f}°\n移动幅度: {magnitude:.2f}\n================\n"
+    
+    print(debug_info)
     
     return angle, magnitude
 
@@ -223,19 +374,6 @@ def get_memory_usage():
     """获取当前进程的内存使用量（MB）"""
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024
-
-def frame_generator(cap, frame_interval=1, resize_scale=1.0):
-    """生成器函数，按指定间隔生成帧"""
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if resize_scale != 1.0:
-            frame = cv2.resize(frame, (0, 0), fx=resize_scale, fy=resize_scale, interpolation=cv2.INTER_AREA)
-        yield frame
-        for _ in range(frame_interval - 1):
-            if not cap.grab():
-                return
 
 def resize_to_screen(image, max_width=1920, max_height=1080):
     """调整图像大小以适应屏幕，保持宽高比"""
@@ -253,129 +391,203 @@ def resize_to_screen(image, max_width=1920, max_height=1080):
         return resized, new_width, new_height
     return image, width, height
 
-def process_video(video_path, start_frame=0, frame_interval=1, i=1, resize_scale=0.5, display_every=10):
-    """处理视频"""
-    # 创建输出目录
-    Path('output').mkdir(exist_ok=True)
-    
-    # 初始化性能监控变量
-    start_time = time.time()
-    max_memory = 0
-    memory_readings = []
-    
-    # 创建窗口
-    cv2.namedWindow('Panorama Progress', cv2.WINDOW_NORMAL)
-    
-    # 打开视频
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise ValueError("无法打开视频文件")
-    
-    try:
-        # 跳到起始帧
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-        
-        # 创建生成器
-        frames = frame_generator(cap, frame_interval, resize_scale)
-        
-        # 读取第一帧
-        try:
-            prev_frame = next(frames)
-        except StopIteration:
-            raise ValueError("无法读取第一帧")
-        
-        # 初始化全景图
-        panorama = Panorama(prev_frame)
-        frame_count = 1
-        
-        # 显示初始状态
-        initial_result = panorama.get_result()
-        display_result, win_width, win_height = resize_to_screen(initial_result)
-        cv2.resizeWindow('Panorama Progress', win_width, win_height)
-        cv2.imshow('Panorama Progress', display_result)
-        cv2.waitKey(1)
-        
-        for curr_frame in frames:
-            # 计算运动
-            angle, magnitude = calculate_movement(prev_frame, curr_frame)
-            
-            # 检查计算结果是否有效
-            if angle is None or magnitude is None:
-                print("\n无法计算帧间运动，跳过当前帧")
-                prev_frame = curr_frame
-                frame_count += 1
-                continue
-                
-            # 添加到全景图
-            try:
-                panorama.add_frame(curr_frame, angle, magnitude)
-                print(f"\r处理第 {frame_count} 帧 - 方向: {angle:.1f}°, 幅度: {magnitude:.1f}", end="")
-                
-                # 获取当前结果并显示（每 display_every 帧）
-                if frame_count % display_every == 0:
-                    current_result = panorama.get_result()
-                    display_result, win_width, win_height = resize_to_screen(current_result)
-                    cv2.resizeWindow('Panorama Progress', win_width, win_height)
-                    cv2.imshow('Panorama Progress', display_result)
-                    
-                    # 删除临时变量
-                    del current_result, display_result, win_width, win_height
-                
-            except Exception as e:
-                print(f"\n处理帧时出错: {str(e)}")
-                break
-            
-            # 监控内存使用
-            current_memory = get_memory_usage()
-            memory_readings.append(current_memory)
-            max_memory = max(max_memory, current_memory)
-            
-            prev_frame = curr_frame
-            frame_count += 1
-            
-            # 定期清理内存
-            if frame_count % 100 == 0:
-                gc.collect()
-            
-            # 检查是否按下 'q' 键退出
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                print("\n用户终止处理")
-                break
-        
-        # 保存结果
-        end_time = time.time()
-        result = panorama.get_result()
-        cv2.imwrite(f'output/panorama_{i}.jpg', result)
-        print(f"\n处理完成，共处理 {frame_count} 帧")
-        
-        # 计算并显示性能统计
-        total_time = end_time - start_time
-        avg_memory = sum(memory_readings) / len(memory_readings) if memory_readings else 0
+# 主窗口类
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super(MainWindow, self).__init__()
+        uic.loadUi('videoPanorama.ui', self)
 
-        # 显示最终结果
-        cv2.namedWindow('Final Panorama', cv2.WINDOW_NORMAL)
-        final_display, win_width, win_height = resize_to_screen(result)
-        cv2.resizeWindow('Final Panorama', win_width, win_height)
-        cv2.imshow('Final Panorama', final_display)
-        print("\n按任意键关闭窗口...")
-        cv2.waitKey(0)
-        
-        # 性能统计
-        print(f"\n\n=== 性能统计 ===")
-        print(f"总处理时间: {total_time:.2f} 秒")
-        print(f"平均每帧处理时间: {total_time/frame_count:.2f} 秒" if frame_count else "平均每帧处理时间: N/A")
-        print(f"最大内存使用: {max_memory:.2f} MB")
-        print(f"平均内存使用: {avg_memory:.2f} MB" if memory_readings else "平均内存使用: N/A")
-        print(f"总处理帧数: {frame_count}")
-        print("================")
-        
-    finally:
-        cap.release()
-        gc.collect()
+        # 调试：列出所有子控件及其 objectName
+        print("Loaded UI controls:")
+        for widget in self.findChildren(QtWidgets.QWidget):
+            print(f"{widget.__class__.__name__}: {widget.objectName()}")
+
+        # 获取UI元素
+        self.select_button = self.findChild(QtWidgets.QPushButton, 'select_button')
+        self.start_button = self.findChild(QtWidgets.QPushButton, 'start_button')
+        self.switch_button = self.findChild(QtWidgets.QPushButton, 'switch_button')
+        self.console_window = self.findChild(QtWidgets.QTextBrowser, 'console_window')
+        self.small_graphic_window = self.findChild(QtWidgets.QGraphicsView, 'small_graphic_window')
+        self.big_graphic_window = self.findChild(QtWidgets.QGraphicsView, 'big_graphic_window')
+
+        # 检查是否成功找到所有控件
+        if not all([self.select_button, self.start_button, self.switch_button, self.console_window, self.small_graphic_window, self.big_graphic_window]):
+            QMessageBox.critical(self, "错误", "无法找到所有UI控件。请检查UI文件中的objectName属性。")
+            sys.exit(1)
+
+        # 初始化图形场景
+        self.small_scene = QtWidgets.QGraphicsScene()
+        self.big_scene = QtWidgets.QGraphicsScene()
+        self.small_graphic_window.setScene(self.small_scene)
+        self.big_graphic_window.setScene(self.big_scene)
+
+        # 设置初始视频路径
+        self.video_path = None
+
+        # 连接按钮信号
+        self.select_button.clicked.connect(self.select_video)
+        self.start_button.clicked.connect(self.start_processing)
+        self.switch_button.clicked.connect(self.switch_windows)
+
+        # 重定向print到console_window
+        sys.stdout = EmittingStream()
+        sys.stdout.text_written.connect(self.write_console)
+        sys.stderr = EmittingStream()
+        sys.stderr.text_written.connect(self.write_console)
+
+        self.current_display = 'big'  # 当前显示的窗口
+
+    def write_console(self, text):
+        self.console_window.append(text)
+
+    def select_video(self):
+        try:
+            # 设置文件对话框选项
+            options = QFileDialog.Option.ReadOnly
+            # 如果需要其他选项，可以组合使用，例如：
+            # options |= QFileDialog.Option.DontUseNativeDialog
+
+            # 打开文件对话框
+            file_name, _ = QFileDialog.getOpenFileName(
+                self, 
+                "选择视频文件", 
+                "", 
+                "视频文件 (*.mp4 *.avi *.mov *.mkv)", 
+                options=options
+            )
+            
+            if file_name:
+                self.video_path = file_name
+                self.console_window.append(f"已选择视频: {self.video_path}")
+                print(f"已选择视频: {self.video_path}")  # 调试输出
+
+                # 显示原视频的第一帧
+                cap = cv2.VideoCapture(self.video_path)
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret:
+                        print("成功读取第一帧")  # 调试输出
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        height, width, channel = frame.shape
+                        bytes_per_line = 3 * width
+                        qimg = QtGui.QImage(frame.data, width, height, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+                        pixmap = QtGui.QPixmap.fromImage(qimg)
+                        self.small_scene.clear()
+                        self.small_scene.addPixmap(pixmap)
+                        self.console_window.append("已显示视频的第一帧。")
+                    else:
+                        self.console_window.append("无法读取视频的第一帧。")
+                        QMessageBox.warning(self, "警告", "无法读取视频的第一帧。")
+                    cap.release()
+                else:
+                    QMessageBox.critical(self, "错误", "无法打开选择的视频文件")
+        except Exception as e:
+            # 将异常信息输出到控制台窗口
+            error_message = f"选择视频时出错: {str(e)}"
+            self.console_window.append(error_message)
+            QMessageBox.critical(self, "错误", error_message)
+            print(error_message)  # 同时打印到终端以便进一步调试
+
+    def start_processing(self):
+        if not self.video_path:
+            QMessageBox.warning(self, "警告", "请先选择一个视频文件")
+            return
+
+        # 禁用按钮以防止多次启动
+        self.select_button.setEnabled(False)
+        self.start_button.setEnabled(False)
+
+        # 创建线程和处理对象
+        self.thread = QThread()
+        self.worker = VideoProcessor(
+            video_path=self.video_path,
+            start_frame=0,
+            frame_interval=1,
+            resize_scale=0.5,
+            display_every=10
+        )
+        self.worker.moveToThread(self.thread)
+
+        # 连接信号
+        self.thread.started.connect(self.worker.process_video)
+        self.worker.progress.connect(self.update_console)
+        self.worker.finished.connect(self.processing_finished)
+        self.worker.error.connect(self.processing_error)
+        self.worker.update_display.connect(self.update_big_graphic)
+
+        # 连接线程结束后清理
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+
+        self.thread.start()
+
+    def update_console(self, message):
+        self.console_window.append(message)
+
+    def processing_finished(self, result, total_time, avg_memory, frame_count):
+        self.console_window.append("视频处理完成。")
+        self.display_image(result, self.big_scene)
+        self.select_button.setEnabled(True)
+        self.start_button.setEnabled(True)
+
+    def processing_error(self, error_message):
+        self.console_window.append(f"错误: {error_message}")
+        QMessageBox.critical(self, "错误", error_message)
+        self.select_button.setEnabled(True)
+        self.start_button.setEnabled(True)
+
+    def update_big_graphic(self, image):
+        self.display_image(image, self.big_scene)
+
+    def display_image(self, image, scene):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        height, width, channel = image.shape
+        bytes_per_line = 3 * width
+        qimg = QtGui.QImage(image.data, width, height, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+        pixmap = QtGui.QPixmap.fromImage(qimg)
+        scene.clear()
+        scene.addPixmap(pixmap)
+
+    def switch_windows(self):
+        if self.current_display == 'big':
+            # 将大窗口内容切换到小窗口
+            self.small_scene.clear()
+            items = self.big_scene.items()
+            if items:
+                pixmap = items[0].pixmap()
+                self.small_scene.addPixmap(pixmap)
+            self.big_scene.clear()
+            self.current_display = 'small'
+            self.console_window.append("已将大窗口内容切换到小窗口")
+        else:
+            # 将小窗口内容切换到大窗口
+            self.big_scene.clear()
+            items = self.small_scene.items()
+            if items:
+                pixmap = items[0].pixmap()
+                self.big_scene.addPixmap(pixmap)
+            self.small_scene.clear()
+            self.current_display = 'big'
+            self.console_window.append("已将小窗口内容切换到大窗口")
+
+    def closeEvent(self, event):
+        # 确保线程在关闭时停止
+        try:
+            if hasattr(self, 'worker') and self.worker.is_running:
+                self.worker.stop()
+                self.thread.quit()
+                self.thread.wait()
+        except:
+            pass
+        event.accept()
 
 if __name__ == "__main__":
-    cv2.setNumThreads(16)  # 根据CPU核心数调整
-    i = 8
-    video_path = f"video/drone/{i}.mp4"  
-    process_video(video_path, start_frame=1, frame_interval=10, i=i, resize_scale=0.5, display_every=10)
+    # 忽略DeprecationWarning（如果需要）
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+    app = QtWidgets.QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

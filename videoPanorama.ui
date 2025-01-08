@@ -72,7 +72,7 @@ QPushButton:hover{
          <widget class="QGraphicsView" name="small_graphic_window"/>
         </item>
         <item>
-         <widget class="QPushButton" name="switc_button">
+         <widget class="QPushButton" name="switch_button">
           <property name="text">
            <string>切换窗口</string>
           </property>
