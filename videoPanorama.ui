@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1015</width>
-    <height>534</height>
+    <width>995</width>
+    <height>619</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -19,8 +19,9 @@
 	background-color:#383934;
 	border-radius: 5px
 }
-.label{
-	color: rgb(151, 190, 21) 
+#ZOOMLION{
+	color: rgb(151, 190, 21);
+	font: bold 40px
 }
 #console_window{
 	background-color:#707070;
@@ -50,9 +51,9 @@ QPushButton:hover{
        <widget class="QGraphicsView" name="big_graphic_window"/>
       </item>
       <item>
-       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,2,1,5,1,1">
+       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="1,2,1,5,1,1">
         <item>
-         <widget class="QLabel" name="label">
+         <widget class="QLabel" name="ZOOMLION">
           <property name="layoutDirection">
            <enum>Qt::LayoutDirection::LeftToRight</enum>
           </property>
