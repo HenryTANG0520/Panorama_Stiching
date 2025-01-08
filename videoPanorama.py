@@ -225,20 +225,18 @@ def frame_generator(cap, frame_interval=1, resize_scale=1.0):
                 return
 
 
-def resize_to_screen(image, max_width=1920, max_height=1080):
-    """调整图像大小以适应屏幕，保持宽高比"""
+def resize_to_fit(image, max_width, max_height):
+    """Resize image to fit within max_width and max_height, keeping aspect ratio"""
     height, width = image.shape[:2]
-    
     width_ratio = max_width / width
     height_ratio = max_height / height
     scale = min(width_ratio, height_ratio, 1.0)
-    
     if scale < 1.0:
         new_width = int(width * scale)
         new_height = int(height * scale)
         resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
-        return resized, new_width, new_height
-    return image, width, height
+        return resized
+    return image
 
 # ------------------------ 播放视频的Worker ------------------------
 
@@ -249,11 +247,9 @@ class PlaybackWorker(QObject):
     frame_signal = pyqtSignal(np.ndarray)  # 发送视频帧到小窗口
     error_signal = pyqtSignal(str)         # 发送错误信息
 
-    def __init__(self, video_path, resize_scale=1.0, fps=30):
+    def __init__(self, video_path):
         super().__init__()
         self.video_path = video_path
-        self.resize_scale = resize_scale
-        self.fps = fps
         self.is_running = True
 
     def run(self):
@@ -264,25 +260,24 @@ class PlaybackWorker(QObject):
 
         # 获取视频的实际FPS，如果可用
         video_fps = cap.get(cv2.CAP_PROP_FPS)
-        if video_fps > 0:
-            delay = int(1000 / video_fps)
-        else:
-            delay = int(1000 / self.fps)
+        if video_fps <= 0:
+            video_fps = 30  # 默认FPS
+        frame_interval = 1 / video_fps
 
         while self.is_running:
+            start_time = time.time()
             ret, frame = cap.read()
             if not ret:
-                # 视频播放完毕，重置到开始
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                continue
-
-            if self.resize_scale != 1.0:
-                frame = cv2.resize(frame, (0, 0), fx=self.resize_scale, fy=self.resize_scale, interpolation=cv2.INTER_AREA)
+                # 视频播放完毕，停止播放
+                break
 
             self.frame_signal.emit(frame)
 
             # 控制播放速度
-            QtCore.QThread.msleep(delay)
+            elapsed = time.time() - start_time
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
         cap.release()
 
@@ -478,7 +473,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.video_path = file_name
                 self.console_window.append(f"已选择视频: {self.video_path}")
 
-                # 显示第一帧在小_graphic_window
+                # 显示第一帧在 small_graphic_window
                 cap = cv2.VideoCapture(self.video_path)
                 if cap.isOpened():
                     ret, frame = cap.read()
@@ -538,9 +533,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 启动播放线程
         self.playback_worker = PlaybackWorker(
-            video_path=self.video_path,
-            resize_scale=0.5,  # 根据需要调整
-            fps=30             # 根据需要调整
+            video_path=self.video_path
         )
         self.playback_thread = QThread()
         self.playback_worker.moveToThread(self.playback_thread)
@@ -558,11 +551,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console_window.append("已启动原始视频播放任务")
 
     def display_small_image(self, frame):
-        """在小窗口显示原视频帧"""
+        """在小窗口显示原视频帧，适应窗口大小"""
         try:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, c = frame_rgb.shape
-            qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
+            # 获取 QGraphicsView 的大小
+            view_size = self.small_graphic_window.viewport().size()
+            # 调整图像以适应窗口
+            scaled_frame = resize_to_fit(frame_rgb, view_size.width(), view_size.height())
+            h, w, c = scaled_frame.shape
+            qimg = QtGui.QImage(scaled_frame.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
             pixmap = QtGui.QPixmap.fromImage(qimg)
             self.small_scene.clear()
             self.small_scene.addPixmap(pixmap)
@@ -570,11 +567,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.console_window.append(f"显示小窗口时出错: {str(e)}")
 
     def display_big_image(self, image):
-        """在大窗口显示拼接结果或进度"""
+        """在大窗口显示拼接结果，适应窗口大小"""
         try:
             frame_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            h, w, c = frame_rgb.shape
-            qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
+            # 获取 QGraphicsView 的大小
+            view_size = self.big_graphic_window.viewport().size()
+            # 调整图像以适应窗口
+            scaled_frame = resize_to_fit(frame_rgb, view_size.width(), view_size.height())
+            h, w, c = scaled_frame.shape
+            qimg = QtGui.QImage(scaled_frame.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
             pixmap = QtGui.QPixmap.fromImage(qimg)
             self.big_scene.clear()
             self.big_scene.addPixmap(pixmap)
@@ -636,20 +637,20 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             self.switch_count += 1
             if self.switch_count % 2 == 1:
-                # 奇数次切换：大窗口显示原始视频，小窗口显示生成视频
-                # 重新连接信号
+                # 奇数次切换：大窗口显示原始视频，小窗口显示生成的视频
+                # 断开当前连接
                 if self.playback_worker:
                     try:
                         self.playback_worker.frame_signal.disconnect(self.display_small_image)
+                        self.playback_worker.frame_signal.connect(self.display_big_image)
                     except:
                         pass
-                    self.playback_worker.frame_signal.connect(self.display_big_image)
                 if self.processing_worker:
                     try:
                         self.processing_worker.result_signal.disconnect(self.display_big_image)
+                        self.processing_worker.result_signal.connect(self.display_small_image)
                     except:
                         pass
-                    self.processing_worker.result_signal.connect(self.display_small_image)
                 self.current_display = 'small_big'
                 self.console_window.append("已切换：大窗口显示原始视频，小窗口显示生成视频")
             else:
@@ -657,15 +658,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 if self.playback_worker:
                     try:
                         self.playback_worker.frame_signal.disconnect(self.display_big_image)
+                        self.playback_worker.frame_signal.connect(self.display_small_image)
                     except:
                         pass
-                    self.playback_worker.frame_signal.connect(self.display_small_image)
                 if self.processing_worker:
                     try:
                         self.processing_worker.result_signal.disconnect(self.display_small_image)
+                        self.processing_worker.result_signal.connect(self.display_big_image)
                     except:
                         pass
-                    self.processing_worker.result_signal.connect(self.display_big_image)
                 self.current_display = 'big_small'
                 self.console_window.append("已切换：大窗口显示生成视频，小窗口显示原始视频")
         except Exception as e:
