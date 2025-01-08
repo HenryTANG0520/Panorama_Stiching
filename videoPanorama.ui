@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1015</width>
+    <height>534</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>MainWindow</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">*{
+	font-family: &quot;微软雅黑&quot;;
+	background-color:#383934;
+	border-radius: 5px
+}
+.label{
+	color: rgb(151, 190, 21) 
+}
+#console_window{
+	background-color:#707070;
+	color: white
+}
+
+QPushButton{ 
+    color: white ;
+    background-color: rgb(151, 190, 21) ;
+    font-size:15px;
+	height: 35px
+}
+QPushButton:hover{ 
+    color: white ;
+    background-color: rgb(151, 190, 21) ;
+    font-size:15px;
+	height: 35px;
+	border: 1px solid white
+}
+</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout_6">
+    <item>
+     <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="5,1">
+      <item>
+       <widget class="QGraphicsView" name="big_graphic_window"/>
+      </item>
+      <item>
+       <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,2,1,5,1,1">
+        <item>
+         <widget class="QLabel" name="label">
+          <property name="layoutDirection">
+           <enum>Qt::LayoutDirection::LeftToRight</enum>
+          </property>
+          <property name="frameShadow">
+           <enum>QFrame::Shadow::Plain</enum>
+          </property>
+          <property name="text">
+           <string>ZOOMLION</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGraphicsView" name="small_graphic_window"/>
+        </item>
+        <item>
+         <widget class="QPushButton" name="switc_button">
+          <property name="text">
+           <string>切换窗口</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTextBrowser" name="console_window">
+          <property name="tabletTracking">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="select_button">
+          <property name="text">
+           <string>选择视频</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="start_button">
+          <property name="text">
+           <string>开始拼接</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
