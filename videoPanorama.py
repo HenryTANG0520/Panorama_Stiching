@@ -14,7 +14,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets, uic
 from PyQt6.QtCore import pyqtSignal, QObject, QThread, Qt
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
-# ------------------------ 保留您的核心算法与函数 ------------------------
+# ------------------------ 核心算法与函数 ------------------------
 
 def get_memory_usage():
     """获取当前进程的内存使用量（MB）"""
@@ -193,7 +193,7 @@ def calculate_movement(img1, img2):
     print(f"平均移动: dx={dx:.2f}, dy={dy:.2f}")
     print(f"移动标准差: dx_std={std_dev[0]:.2f}, dy_std={std_dev[1]:.2f}")
     
-    angle = math.degrees(math.atan2(-dy, dx))  # 使用 -dy，是因为图像坐标系 y 轴向下
+    angle = math.degrees(math.atan2(-dy, dx))  # 使用 -dy，因为图像坐标系 y 轴向下
     angle = (angle + 90) % 360
     
     magnitude = math.sqrt(dx*dx + dy*dy)
@@ -240,16 +240,61 @@ def resize_to_screen(image, max_width=1920, max_height=1080):
         return resized, new_width, new_height
     return image, width, height
 
-# ------------------------ Worker: 在后台线程中执行“原 process_video”逻辑，并保留性能统计输出 ------------------------
+# ------------------------ 播放视频的Worker ------------------------
 
-class VideoWorker(QObject):
+class PlaybackWorker(QObject):
     """
-    后台线程使用的Worker，用于执行与您原先process_video相同的逻辑，
-    并在结束时发送性能统计（总时长、平均每帧时长、最大/平均内存使用、总处理帧数）。
+    后台线程使用的Worker，用于实时播放原始视频到小窗口。
     """
-    progress_signal = pyqtSignal(str)         # 用于输出进度/日志
-    result_signal = pyqtSignal(np.ndarray)    # 中间结果（用于实时更新大窗口）
-    error_signal = pyqtSignal(str)            # 出错时的信号
+    frame_signal = pyqtSignal(np.ndarray)  # 发送视频帧到小窗口
+    error_signal = pyqtSignal(str)         # 发送错误信息
+
+    def __init__(self, video_path, resize_scale=1.0, fps=30):
+        super().__init__()
+        self.video_path = video_path
+        self.resize_scale = resize_scale
+        self.fps = fps
+        self.is_running = True
+
+    def run(self):
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            self.error_signal.emit("无法打开视频文件进行播放")
+            return
+
+        # 获取视频的实际FPS，如果可用
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
+        if video_fps > 0:
+            delay = int(1000 / video_fps)
+        else:
+            delay = int(1000 / self.fps)
+
+        while self.is_running:
+            ret, frame = cap.read()
+            if not ret:
+                # 视频播放完毕，重置到开始
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+
+            if self.resize_scale != 1.0:
+                frame = cv2.resize(frame, (0, 0), fx=self.resize_scale, fy=self.resize_scale, interpolation=cv2.INTER_AREA)
+
+            self.frame_signal.emit(frame)
+
+            # 控制播放速度
+            QtCore.QThread.msleep(delay)
+
+        cap.release()
+
+# ------------------------ 处理视频的Worker ------------------------
+
+class ProcessingWorker(QObject):
+    """
+    后台线程使用的Worker，用于执行视频处理逻辑，并生成全景图。
+    """
+    progress_signal = pyqtSignal(str)                # 用于输出进度/日志
+    result_signal = pyqtSignal(np.ndarray)           # 中间结果（用于实时更新大窗口）
+    error_signal = pyqtSignal(str)                   # 出错时的信号
 
     # finished_signal 包含:
     #   - result: 最终全景图
@@ -258,8 +303,6 @@ class VideoWorker(QObject):
     #   - max_memory: 最大内存使用
     #   - avg_memory: 平均内存使用
     finished_signal = pyqtSignal(np.ndarray, int, float, float, float)
-
-    update_small_signal = pyqtSignal(np.ndarray)  # 更新小窗口中的原视频帧
 
     def __init__(self, video_path, start_frame=0, frame_interval=1, i=1, resize_scale=0.5, display_every=10):
         super().__init__()
@@ -273,17 +316,19 @@ class VideoWorker(QObject):
 
     def run(self):
         """
-        将您的原 process_video 函数的核心逻辑移动到这里。
-        不再使用 OpenCV 窗口，而是用 PyQt 的信号与主线程进行通信。
+        执行视频处理逻辑，生成全景图，并发送进度和结果信号。
         """
         start_time = time.time()
         max_memory = 0
         memory_readings = []
 
+        # 创建输出目录
+        Path('output').mkdir(exist_ok=True)
+
         # 打开视频
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
-            self.error_signal.emit("无法打开视频文件")
+            self.error_signal.emit("无法打开视频文件进行处理")
             return
 
         try:
@@ -302,18 +347,15 @@ class VideoWorker(QObject):
             panorama = Panorama(prev_frame)
             frame_count = 1
 
-            # 小窗口先显示第一帧
-            self.update_small_signal.emit(prev_frame)
-
             for curr_frame in frames:
                 if not self.is_running:
-                    self.progress_signal.emit("\n用户终止处理")
+                    self.progress_signal.emit("用户终止处理")
                     break
 
                 # 计算运动
                 angle, magnitude = calculate_movement(prev_frame, curr_frame)
                 if angle is None or magnitude is None:
-                    self.progress_signal.emit(f"\n无法计算帧间运动，跳过当前帧 {frame_count}")
+                    self.progress_signal.emit(f"无法计算帧间运动，跳过第 {frame_count} 帧")
                     prev_frame = curr_frame
                     frame_count += 1
                     continue
@@ -322,20 +364,17 @@ class VideoWorker(QObject):
                 try:
                     panorama.add_frame(curr_frame, angle, magnitude)
                     self.progress_signal.emit(
-                        f"\r处理第 {frame_count} 帧 - 方向: {angle:.1f}°, 幅度: {magnitude:.1f}"
+                        f"处理第 {frame_count} 帧 - 方向: {angle:.1f}°, 幅度: {magnitude:.1f}"
                     )
 
-                    # 每隔 display_every 帧，向主线程发送一次当前拼接结果
+                    # 每隔 display_every 帧，发送当前拼接结果
                     if frame_count % self.display_every == 0:
                         current_result = panorama.get_result()
                         self.result_signal.emit(current_result)
 
                 except Exception as e:
-                    self.error_signal.emit(f"\n处理帧时出错: {str(e)}")
+                    self.error_signal.emit(f"处理帧时出错: {str(e)}")
                     break
-
-                # 更新小窗原视频帧
-                self.update_small_signal.emit(curr_frame)
 
                 # 监控内存使用
                 current_memory = get_memory_usage()
@@ -353,9 +392,7 @@ class VideoWorker(QObject):
             result = panorama.get_result()
             output_path = f'output/panorama_{self.i}.jpg'
             cv2.imwrite(output_path, result)
-
-            # 打印日志
-            self.progress_signal.emit(f"\n处理完成，共处理 {frame_count} 帧，结果保存至 {output_path}")
+            self.progress_signal.emit(f"处理完成，共处理 {frame_count} 帧，结果保存至 {output_path}")
 
             # 性能统计
             total_time = end_time - start_time
@@ -385,7 +422,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # 加载 UI
         uic.loadUi('videoPanorama.ui', self)
 
-        # 绑定UI控件
+        # 获取UI元素
         self.select_button = self.findChild(QtWidgets.QPushButton, 'select_button')
         self.start_button = self.findChild(QtWidgets.QPushButton, 'start_button')
         self.switch_button = self.findChild(QtWidgets.QPushButton, 'switch_button')
@@ -399,7 +436,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.small_graphic_window.setScene(self.small_scene)
         self.big_graphic_window.setScene(self.big_scene)
 
-        # 连接信号槽
+        # 连接按钮
         self.select_button.clicked.connect(self.select_video)
         self.start_button.clicked.connect(self.start_processing)
         self.switch_button.clicked.connect(self.switch_windows)
@@ -411,9 +448,14 @@ class MainWindow(QtWidgets.QMainWindow):
         sys.stderr.text_written.connect(self.write_console)
 
         self.video_path = None
-        self.current_display = 'big'
-        self.thread = None
-        self.worker = None
+        self.current_display = 'big'  # 初始显示状态
+        self.switch_count = 0        # 切换计数
+
+        # 线程和工作者
+        self.playback_thread = None
+        self.playback_worker = None
+        self.processing_thread = None
+        self.processing_worker = None
 
     def write_console(self, text):
         self.console_window.append(text)
@@ -429,16 +471,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 options=options
             )
             if file_name:
+                # 如果之前有播放或处理线程，先停止它们
+                self.stop_playback()
+                self.stop_processing()
+
                 self.video_path = file_name
                 self.console_window.append(f"已选择视频: {self.video_path}")
-                # 显示第一帧在 small_graphic_window
+
+                # 显示第一帧在小_graphic_window
                 cap = cv2.VideoCapture(self.video_path)
                 if cap.isOpened():
                     ret, frame = cap.read()
                     if ret:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         h, w, c = frame_rgb.shape
-                        qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888)
+                        qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
                         pixmap = QtGui.QPixmap.fromImage(qimg)
                         self.small_scene.clear()
                         self.small_scene.addPixmap(pixmap)
@@ -458,12 +505,12 @@ class MainWindow(QtWidgets.QMainWindow):
             QMessageBox.warning(self, "警告", "请先选择一个视频文件")
             return
 
+        # 禁用按钮以防止重复点击
         self.select_button.setEnabled(False)
         self.start_button.setEnabled(False)
 
-        # 创建后台线程
-        self.thread = QThread()
-        self.worker = VideoWorker(
+        # 启动处理线程
+        self.processing_worker = ProcessingWorker(
             video_path=self.video_path,
             start_frame=1,       # 可根据需求修改
             frame_interval=10,   # 可根据需求修改
@@ -471,44 +518,68 @@ class MainWindow(QtWidgets.QMainWindow):
             resize_scale=0.5,    # 可根据需求修改
             display_every=10     # 可根据需求修改
         )
-        self.worker.moveToThread(self.thread)
-
-        # 当线程开始时，执行 worker.run
-        self.thread.started.connect(self.worker.run)
+        self.processing_thread = QThread()
+        self.processing_worker.moveToThread(self.processing_thread)
 
         # 连接信号
-        self.worker.progress_signal.connect(self.update_console)
-        self.worker.result_signal.connect(self.display_big_image)
-        self.worker.error_signal.connect(self.processing_error)
-        self.worker.update_small_signal.connect(self.display_small_image)
-
-        # 关键：包含性能统计的 finished_signal
-        self.worker.finished_signal.connect(self.processing_finished)
+        self.processing_thread.started.connect(self.processing_worker.run)
+        self.processing_worker.progress_signal.connect(self.update_console)
+        self.processing_worker.result_signal.connect(self.display_big_image)
+        self.processing_worker.error_signal.connect(self.processing_error)
+        self.processing_worker.finished_signal.connect(self.processing_finished)
 
         # 线程结束后自动清理
-        self.worker.finished_signal.connect(self.thread.quit)
-        self.worker.finished_signal.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        self.processing_worker.finished_signal.connect(self.processing_thread.quit)
+        self.processing_worker.finished_signal.connect(self.processing_worker.deleteLater)
+        self.processing_thread.finished.connect(self.processing_thread.deleteLater)
 
-        self.thread.start()
+        self.processing_thread.start()
+        self.console_window.append("已启动视频处理任务")
+
+        # 启动播放线程
+        self.playback_worker = PlaybackWorker(
+            video_path=self.video_path,
+            resize_scale=0.5,  # 根据需要调整
+            fps=30             # 根据需要调整
+        )
+        self.playback_thread = QThread()
+        self.playback_worker.moveToThread(self.playback_thread)
+
+        # 连接信号
+        self.playback_thread.started.connect(self.playback_worker.run)
+        self.playback_worker.frame_signal.connect(self.display_small_image)
+        self.playback_worker.error_signal.connect(self.playback_error)
+
+        # 线程结束后自动清理
+        self.playback_thread.finished.connect(self.playback_worker.deleteLater)
+        self.playback_thread.finished.connect(self.playback_thread.deleteLater)
+
+        self.playback_thread.start()
+        self.console_window.append("已启动原始视频播放任务")
 
     def display_small_image(self, frame):
         """在小窗口显示原视频帧"""
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, c = frame_rgb.shape
-        qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888)
-        pixmap = QtGui.QPixmap.fromImage(qimg)
-        self.small_scene.clear()
-        self.small_scene.addPixmap(pixmap)
+        try:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, c = frame_rgb.shape
+            qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
+            pixmap = QtGui.QPixmap.fromImage(qimg)
+            self.small_scene.clear()
+            self.small_scene.addPixmap(pixmap)
+        except Exception as e:
+            self.console_window.append(f"显示小窗口时出错: {str(e)}")
 
     def display_big_image(self, image):
         """在大窗口显示拼接结果或进度"""
-        frame_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h, w, c = frame_rgb.shape
-        qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888)
-        pixmap = QtGui.QPixmap.fromImage(qimg)
-        self.big_scene.clear()
-        self.big_scene.addPixmap(pixmap)
+        try:
+            frame_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            h, w, c = frame_rgb.shape
+            qimg = QtGui.QImage(frame_rgb.data, w, h, 3*w, QtGui.QImage.Format.Format_RGB888).copy()
+            pixmap = QtGui.QPixmap.fromImage(qimg)
+            self.big_scene.clear()
+            self.big_scene.addPixmap(pixmap)
+        except Exception as e:
+            self.console_window.append(f"显示大窗口时出错: {str(e)}")
 
     def update_console(self, message):
         self.console_window.append(message)
@@ -542,46 +613,89 @@ class MainWindow(QtWidgets.QMainWindow):
         # 在大窗显示最终结果
         self.display_big_image(result)
 
+        # 重新启用按钮
         self.select_button.setEnabled(True)
         self.start_button.setEnabled(True)
 
     def processing_error(self, error_message):
-        self.console_window.append(f"\n错误: {error_message}")
-        QMessageBox.critical(self, "错误", error_message)
+        self.console_window.append(f"\n处理错误: {error_message}")
+        QMessageBox.critical(self, "处理错误", error_message)
+        self.stop_processing()
+        self.select_button.setEnabled(True)
+        self.start_button.setEnabled(True)
+
+    def playback_error(self, error_message):
+        self.console_window.append(f"\n播放错误: {error_message}")
+        QMessageBox.critical(self, "播放错误", error_message)
+        self.stop_playback()
         self.select_button.setEnabled(True)
         self.start_button.setEnabled(True)
 
     def switch_windows(self):
-        if self.current_display == 'big':
-            # 将大窗口内容切换到小窗口
-            self.small_scene.clear()
-            items = self.big_scene.items()
-            if items:
-                pixmap = items[0].pixmap()
-                self.small_scene.addPixmap(pixmap)
-            self.big_scene.clear()
-            self.current_display = 'small'
-            self.console_window.append("已将大窗口内容切换到小窗口")
-        else:
-            # 将小窗口内容切换到大窗口
-            self.big_scene.clear()
-            items = self.small_scene.items()
-            if items:
-                pixmap = items[0].pixmap()
-                self.big_scene.addPixmap(pixmap)
-            self.small_scene.clear()
-            self.current_display = 'big'
-            self.console_window.append("已将小窗口内容切换到大窗口")
+        """切换小窗口和大窗口的显示内容"""
+        try:
+            self.switch_count += 1
+            if self.switch_count % 2 == 1:
+                # 奇数次切换：大窗口显示原始视频，小窗口显示生成视频
+                # 重新连接信号
+                if self.playback_worker:
+                    try:
+                        self.playback_worker.frame_signal.disconnect(self.display_small_image)
+                    except:
+                        pass
+                    self.playback_worker.frame_signal.connect(self.display_big_image)
+                if self.processing_worker:
+                    try:
+                        self.processing_worker.result_signal.disconnect(self.display_big_image)
+                    except:
+                        pass
+                    self.processing_worker.result_signal.connect(self.display_small_image)
+                self.current_display = 'small_big'
+                self.console_window.append("已切换：大窗口显示原始视频，小窗口显示生成视频")
+            else:
+                # 偶数次切换：大窗口显示生成视频，小窗口显示原始视频
+                if self.playback_worker:
+                    try:
+                        self.playback_worker.frame_signal.disconnect(self.display_big_image)
+                    except:
+                        pass
+                    self.playback_worker.frame_signal.connect(self.display_small_image)
+                if self.processing_worker:
+                    try:
+                        self.processing_worker.result_signal.disconnect(self.display_small_image)
+                    except:
+                        pass
+                    self.processing_worker.result_signal.connect(self.display_big_image)
+                self.current_display = 'big_small'
+                self.console_window.append("已切换：大窗口显示生成视频，小窗口显示原始视频")
+        except Exception as e:
+            self.console_window.append(f"切换窗口时出错: {str(e)}")
+
+    def stop_playback(self):
+        """停止播放线程"""
+        if self.playback_worker and self.playback_thread:
+            self.playback_worker.is_running = False
+            self.playback_thread.quit()
+            self.playback_thread.wait()
+            self.playback_worker = None
+            self.playback_thread = None
+            self.console_window.append("已停止原始视频播放任务")
+
+    def stop_processing(self):
+        """停止处理线程"""
+        if self.processing_worker and self.processing_thread:
+            self.processing_worker.is_running = False
+            self.processing_thread.quit()
+            self.processing_thread.wait()
+            self.processing_worker = None
+            self.processing_thread = None
+            self.console_window.append("已停止视频处理任务")
 
     def closeEvent(self, event):
-        """关闭窗口时，若线程还在跑，需要安全退出"""
-        if self.worker and self.worker.is_running:
-            self.worker.is_running = False
-        if self.thread and self.thread.isRunning():
-            self.thread.quit()
-            self.thread.wait()
+        """关闭窗口时，确保所有线程安全退出"""
+        self.stop_playback()
+        self.stop_processing()
         event.accept()
-
 
 if __name__ == "__main__":
     import warnings
