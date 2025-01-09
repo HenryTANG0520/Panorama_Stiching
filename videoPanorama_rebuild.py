@@ -508,10 +508,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.processing_worker = ProcessingWorker(
             video_path=self.video_path,
             start_frame=1,       # 可根据需求修改
-            frame_interval=10,   # 可根据需求修改
+            frame_interval=2,   # 可根据需求修改
             i=8,                 # 可根据需求修改
             resize_scale=0.5,    # 可根据需求修改
-            display_every=10     # 可根据需求修改
+            display_every=1     # 可根据需求修改
         )
         self.processing_thread = QThread()
         self.processing_worker.moveToThread(self.processing_thread)
