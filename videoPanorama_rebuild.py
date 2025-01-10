@@ -507,11 +507,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # 启动处理线程
         self.processing_worker = ProcessingWorker(
             video_path=self.video_path,
-            start_frame=1,       # 可根据需求修改
-            frame_interval=4,   # 可根据需求修改
+            start_frame=1,       # 起始帧，规避开头黑屏导致的拼接错误
+            frame_interval=4,   # 帧间隔，每*帧取一次拼接
             i=8,                 # 可根据需求修改
             resize_scale=0.5,    # 可根据需求修改
-            display_every=1     # 可根据需求修改
+            display_every=1     # 每拼接*次展示一次
         )
         self.processing_thread = QThread()
         self.processing_worker.moveToThread(self.processing_thread)
