@@ -410,17 +410,65 @@ class EmittingStream(QtCore.QObject):
         self.text_written.emit(str(text))
     def flush(self):
         pass
+class SettingWindow(QtWidgets.QMainWindow):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        # 加载设置UI
+        uic.loadUi('setting.ui', self)
+        
+        # 获取返回按钮并连接信号
+        self.pushButton = self.findChild(QtWidgets.QPushButton, 'pushButton')
+        self.pushButton.clicked.connect(self.return_to_main)
+        
+        # 获取所有SpinBox控件
+        self.spinBox = self.findChild(QtWidgets.QSpinBox, 'spinBox')
+        self.spinBox_2 = self.findChild(QtWidgets.QSpinBox, 'spinBox_2')
+        self.spinBox_4 = self.findChild(QtWidgets.QSpinBox, 'spinBox_4')
+        
+        # 设置初始值
+        self.load_settings()
+        
+        # 连接值改变信号
+        self.spinBox.valueChanged.connect(self.save_settings)
+        self.spinBox_2.valueChanged.connect(self.save_settings)
+        self.spinBox_4.valueChanged.connect(self.save_settings)
+    
+    def load_settings(self):
+        """加载设置值"""
+        # 从主窗口获取当前值
+        self.spinBox.setValue(self.main_window.frame_interval)
+        self.spinBox_2.setValue(self.main_window.display_every)
+        self.spinBox_4.setValue(self.main_window.start_frame)
+    
+    def save_settings(self):
+        """保存设置值到主窗口"""
+        self.main_window.frame_interval = self.spinBox.value()
+        self.main_window.display_every = self.spinBox_2.value()
+        self.main_window.start_frame = self.spinBox_4.value()
+    
+    def return_to_main(self):
+        """返回主窗口"""
+        self.save_settings()
+        self.main_window.show()
+        self.close()
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
         # 加载 UI
-        uic.loadUi('videoPanorama_rebuild.ui', self)
+        uic.loadUi('videoPanorama_copy.ui', self)
+
+        # 添加设置参数的默认值
+        self.frame_interval = 4
+        self.display_every = 1
+        self.start_frame = 1
 
         # 获取UI元素
         self.select_button = self.findChild(QtWidgets.QPushButton, 'select_button')
         self.start_button = self.findChild(QtWidgets.QPushButton, 'start_button')
         self.switch_button = self.findChild(QtWidgets.QPushButton, 'switch_button')
+        self.pushButton = self.findChild(QtWidgets.QPushButton, 'pushButton')  # 设置按钮
         self.console_window = self.findChild(QtWidgets.QTextBrowser, 'console_window')
         self.small_graphic_window = self.findChild(QtWidgets.QGraphicsView, 'small_graphic_window')
         self.big_graphic_window = self.findChild(QtWidgets.QGraphicsView, 'big_graphic_window')
@@ -435,6 +483,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.select_button.clicked.connect(self.select_video)
         self.start_button.clicked.connect(self.start_processing)
         self.switch_button.clicked.connect(self.switch_windows)
+        self.pushButton.clicked.connect(self.open_settings)  # 连接设置按钮
 
         # 重定向print到console_window
         sys.stdout = EmittingStream()
@@ -454,6 +503,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def write_console(self, text):
         self.console_window.append(text)
+
+    def open_settings(self):
+        """打开设置窗口"""
+        self.setting_window = SettingWindow(self)
+        self.setting_window.show()
+        self.hide()
 
     def select_video(self):
         try:
@@ -507,11 +562,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # 启动处理线程
         self.processing_worker = ProcessingWorker(
             video_path=self.video_path,
-            start_frame=1,       # 起始帧，规避开头黑屏导致的拼接错误
-            frame_interval=4,   # 帧间隔，每*帧取一次拼接
+            start_frame=self.start_frame,       # 起始帧，规避开头黑屏导致的拼接错误
+            frame_interval=self.frame_interval,   # 帧间隔，每*帧取一次拼接
             i=8,                 # 可根据需求修改
             resize_scale=0.5,    # 可根据需求修改
-            display_every=1     # 每拼接*次展示一次
+            display_every=self.display_every     # 每拼接*次展示一次
         )
         self.processing_thread = QThread()
         self.processing_worker.moveToThread(self.processing_thread)
