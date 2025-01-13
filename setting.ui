@@ -157,7 +157,7 @@ QPushButton:hover{
        <item>
         <layout class="QVBoxLayout" name="verticalLayout_5">
          <item>
-          <layout class="QVBoxLayout" name="verticalLayout">
+          <layout class="QVBoxLayout" name="verticalLayout" stretch="1,1,2">
            <item>
             <widget class="QLabel" name="heading_1">
              <property name="text">
@@ -199,7 +199,7 @@ QPushButton:hover{
           </layout>
          </item>
          <item>
-          <layout class="QVBoxLayout" name="verticalLayout_4">
+          <layout class="QVBoxLayout" name="verticalLayout_4" stretch="1,1,2">
            <item>
             <widget class="QLabel" name="heading_2">
              <property name="text">
@@ -241,7 +241,7 @@ QPushButton:hover{
           </layout>
          </item>
          <item>
-          <layout class="QVBoxLayout" name="verticalLayout_7">
+          <layout class="QVBoxLayout" name="verticalLayout_7" stretch="1,1,2">
            <item>
             <widget class="QLabel" name="heading_3">
              <property name="text">
