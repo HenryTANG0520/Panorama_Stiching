@@ -140,7 +140,7 @@ QPushButton:hover{
       <property name="title">
        <string/>
       </property>
-      <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="1,3,1">
+      <layout class="QHBoxLayout" name="horizontalLayout_5" stretch="0,3,1">
        <item>
         <spacer name="horizontalSpacer_3">
          <property name="orientation">
@@ -306,7 +306,7 @@ QPushButton:hover{
          </property>
          <property name="sizeHint" stdset="0">
           <size>
-           <width>185</width>
+           <width>186</width>
            <height>20</height>
           </size>
          </property>

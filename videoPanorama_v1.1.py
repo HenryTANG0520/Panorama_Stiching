@@ -457,7 +457,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
         # 加载 UI
-        uic.loadUi('videoPanorama_copy.ui', self)
+        uic.loadUi('main.ui', self)
 
         # 添加设置参数的默认值
         self.frame_interval = 4
