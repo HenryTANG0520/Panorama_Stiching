@@ -131,7 +131,7 @@ QPushButton:hover{
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="8,2">
+     <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="4,1">
       <item>
        <widget class="QGraphicsView" name="big_graphic_window"/>
       </item>
