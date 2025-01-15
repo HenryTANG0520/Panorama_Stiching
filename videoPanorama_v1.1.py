@@ -297,7 +297,7 @@ class ProcessingWorker(QObject):
     #   - total_time: 总处理时间
     #   - max_memory: 最大内存使用
     #   - avg_memory: 平均内存使用
-    finished_signal = pyqtSignal(np.ndarray, int, float, float, float)
+    finished_signal = pyqtSignal(np.ndarray, int, float, float, float, float, float)
 
     def __init__(self, video_path, start_frame=0, frame_interval=1, i=1, resize_scale=0.5, display_every=10):
         super().__init__()
@@ -308,6 +308,23 @@ class ProcessingWorker(QObject):
         self.resize_scale = resize_scale
         self.display_every = display_every
         self.is_running = True
+
+        # 添加距离追踪
+        self.total_dx = 0
+        self.total_dy = 0
+        self.euclidean_distance = 0
+        self.manhattan_distance = 0
+    
+    def calculate_distances(self, dx, dy):
+        """计算并更新累积距离"""
+        self.total_dx += abs(dx)
+        self.total_dy += abs(dy)
+        
+        # 计算曼哈顿距离（Manhattan distance）
+        self.manhattan_distance = self.total_dx + self.total_dy
+        
+        # 计算欧几里得距离（Euclidean distance）
+        self.euclidean_distance = math.sqrt(self.total_dx**2 + self.total_dy**2)
 
     def run(self):
         """
@@ -355,6 +372,13 @@ class ProcessingWorker(QObject):
                     frame_count += 1
                     continue
 
+                # 计算dx和dy
+                dx = magnitude * math.cos(math.radians(angle + 90))
+                dy = magnitude * math.sin(math.radians(angle - 90))
+                
+                # 更新距离统计
+                self.calculate_distances(dx, dy)
+
                 # 添加到全景图
                 try:
                     panorama.add_frame(curr_frame, angle, magnitude)
@@ -394,7 +418,15 @@ class ProcessingWorker(QObject):
             avg_memory = sum(memory_readings) / len(memory_readings) if memory_readings else 0
 
             # 发送完成信号
-            self.finished_signal.emit(result, frame_count, total_time, max_memory, avg_memory)
+            self.finished_signal.emit(
+                result, 
+                frame_count, 
+                total_time, 
+                max_memory, 
+                avg_memory,
+                self.manhattan_distance,  # 新增
+                self.euclidean_distance   # 新增
+            )
 
             cap.release()
             gc.collect()
@@ -640,7 +672,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def update_console(self, message):
         self.console_window.append(message)
 
-    def processing_finished(self, result, frame_count, total_time, max_memory, avg_memory):
+    def processing_finished(self, result, frame_count, total_time, max_memory, avg_memory, manhattan_distance, euclidean_distance):
         """
         处理完成后，将性能统计与最终结果打印到 console_window，
         并重新启用按钮。
@@ -662,7 +694,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.console_window.append(f"平均内存使用: {avg_memory:.2f} MB")
         else:
             self.console_window.append("平均内存使用: N/A")
-
+        # 添加距离统计
+        self.console_window.append("\n=== 距离统计 ===")
+        self.console_window.append(f"曼哈顿距离: {manhattan_distance:.2f} px")
+        self.console_window.append(f"欧几里得距离: {euclidean_distance:.2f} px")
+        
         self.console_window.append(f"总处理帧数: {frame_count}")
         self.console_window.append("================")
 
