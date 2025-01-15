@@ -261,7 +261,7 @@ class PlaybackWorker(QObject):
         # 获取视频的实际FPS，如果可用
         video_fps = cap.get(cv2.CAP_PROP_FPS)
         if video_fps <= 0:
-            video_fps = 30  # 默认FPS
+            video_fps = 60  # 默认FPS
         frame_interval = 1 / video_fps
 
         while self.is_running:
